@@ -1,0 +1,165 @@
+name: Generate Test Files
+
+on:
+  workflow_dispatch:
+    inputs:
+      file_count:
+        description: 'Number of files to create'
+        required: true
+        default: '10'
+        type: number
+      
+      use_fixed_size:
+        description: 'Use fixed size for all files'
+        required: true
+        default: false
+        type: boolean
+      
+      fixed_size:
+        description: 'Fixed file size (in MB, e.g., 1, 10, 100)'
+        required: false
+        default: '1'
+        type: number
+      
+      min_size:
+        description: 'Minimum file size for random (in KB, e.g., 512, 1024)'
+        required: false
+        default: '1024'
+        type: number
+      
+      max_size:
+        description: 'Maximum file size for random (in MB, e.g., 5, 10, 50)'
+        required: false
+        default: '10'
+        type: number
+      
+      file_prefix:
+        description: 'Filename prefix'
+        required: false
+        default: 'TestFile'
+        type: string
+      
+      file_extension:
+        description: 'File extension (without dot)'
+        required: false
+        default: 'dat'
+        type: string
+      
+      max_total_size:
+        description: 'Maximum total size in MB (artifact limit is ~2GB)'
+        required: false
+        default: '1024'
+        type: number
+      
+      retention_days:
+        description: 'Number of days to retain artifact'
+        required: false
+        default: '7'
+        type: number
+
+jobs:
+  generate-files:
+    runs-on: windows-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Create output directory
+        shell: pwsh
+        run: |
+          New-Item -Path "output" -ItemType Directory -Force
+          Write-Host "Output directory created"
+      
+      - name: Generate test files
+        shell: pwsh
+        run: |
+          $params = @{
+            FileCount = ${{ github.event.inputs.file_count }}
+            OutputPath = "output"
+            FileNamePrefix = "${{ github.event.inputs.file_prefix }}"
+            FileExtension = "${{ github.event.inputs.file_extension }}"
+            MaxTotalSize = ${{ github.event.inputs.max_total_size }}MB
+          }
+          
+          if ("${{ github.event.inputs.use_fixed_size }}" -eq "true") {
+            $params.FixedSize = ${{ github.event.inputs.fixed_size }}MB
+            Write-Host "Using fixed size: ${{ github.event.inputs.fixed_size }}MB"
+          }
+          else {
+            $params.MinSize = ${{ github.event.inputs.min_size }}KB
+            $params.MaxSize = ${{ github.event.inputs.max_size }}MB
+            Write-Host "Using random size range: ${{ github.event.inputs.min_size }}KB - ${{ github.event.inputs.max_size }}MB"
+          }
+          
+          Write-Host "Starting file generation..."
+          ./Create-DummyData.ps1 @params
+      
+      - name: Get output statistics
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem -Path "output" -File
+          $totalSize = ($files | Measure-Object -Property Length -Sum).Sum
+          $fileCount = $files.Count
+          
+          Write-Host "=========================================="
+          Write-Host "Generation Complete!"
+          Write-Host "=========================================="
+          Write-Host "Files created: $fileCount"
+          Write-Host "Total size: $([math]::Round($totalSize/1MB, 2)) MB"
+          Write-Host "=========================================="
+          
+          # Write to GitHub step summary
+          @"
+          ## Test Files Generated Successfully! 🎉
+          
+          - **Files Created:** $fileCount
+          - **Total Size:** $([math]::Round($totalSize/1MB, 2)) MB
+          - **File Pattern:** ${{ github.event.inputs.file_prefix }}*.${{ github.event.inputs.file_extension }}
+          - **Retention:** ${{ github.event.inputs.retention_days }} days
+          
+          Download the artifact below to get your test files!
+          "@ | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+      
+      - name: Create artifact information file
+        shell: pwsh
+        run: |
+          $info = @"
+          Test Files Generation Info
+          ==========================
+          Generated: $(Get-Date -Format "yyyy-MM-dd HH:mm:ss UTC")
+          Workflow Run: ${{ github.run_number }}
+          
+          Configuration:
+          - File Count: ${{ github.event.inputs.file_count }}
+          - Fixed Size: ${{ github.event.inputs.use_fixed_size }}
+          - File Prefix: ${{ github.event.inputs.file_prefix }}
+          - File Extension: ${{ github.event.inputs.file_extension }}
+          - Max Total Size: ${{ github.event.inputs.max_total_size }} MB
+          
+          "@
+          
+          if ("${{ github.event.inputs.use_fixed_size }}" -eq "true") {
+            $info += "- Fixed Size: ${{ github.event.inputs.fixed_size }} MB`n"
+          }
+          else {
+            $info += "- Min Size: ${{ github.event.inputs.min_size }} KB`n"
+            $info += "- Max Size: ${{ github.event.inputs.max_size }} MB`n"
+          }
+          
+          $info | Out-File -FilePath "output/README.txt"
+      
+      - name: Upload test files artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-files-${{ github.run_number }}
+          path: output/
+          retention-days: ${{ github.event.inputs.retention_days }}
+          compression-level: 6
+      
+      - name: Workflow complete
+        shell: pwsh
+        run: |
+          Write-Host "✅ Workflow completed successfully!"
+          Write-Host "📦 Artifact 'test-files-${{ github.run_number }}' is ready for download"
+          Write-Host "🔗 Go to the Actions tab to download your files"
